@@ -1,64 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { Button } from "@/components/ui/button"
-import { MagicCard } from "@/components/ui/magic-card"
-import { useState } from "react"
+import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueries,
+} from "@tanstack/react-query"
+import type { OpenWeatherApiResponse } from "@/lib/interfaces"
+import CustomCard from "@/components/custom-card"
+import { ShootingStars } from "@/components/ui/shooting-stars"
+import { StarsBackground } from "@/components/ui/stars-background"
 
-export const Route = createFileRoute("/")({ component: App })
+const BASE_URL = "https://api.openweathermap.org/data/2.5/forecast"
 
-interface OpenWeatherApiResponse {
-  coord: Coord
-  weather: Weather[]
-  base: string
-  main: Main
-  visibility: number
-  wind: Wind
-  clouds: Clouds
-  dt: number
-  sys: Sys
-  timezone: number
-  id: number
-  name: string
-  cod: number
-}
+const apiKey = createServerOnlyFn(() => process.env.OPENWEATHER_API_KEY)
 
-interface Sys {
-  type: number
-  id: number
-  country: string
-  sunrise: number
-  sunset: number
-}
-
-interface Clouds {
-  all: number
-}
-
-interface Wind {
-  speed: number
-  deg: number
-}
-
-interface Main {
-  temp: number
-  feels_like: number
-  temp_min: number
-  temp_max: number
-  pressure: number
-  humidity: number
-  sea_level: number
-  grnd_level: number
-}
-
-interface Weather {
-  id: number
-  main: string
-  description: string
-  icon: string
-}
-
-interface Coord {
-  lon: number
-  lat: number
+function buildUrl(lat: number, long: number) {
+  return `${BASE_URL}?lat=${lat}&lon=${long}&appid=${apiKey()}`
 }
 
 interface City {
@@ -81,10 +38,67 @@ const CITIES: City[] = [
   },
 ]
 
-async function App() {
+const getForecast = createServerFn({ method: "GET" })
+  .validator((data: { lat: number; long: number }) => data)
+  .handler(async ({ data }): Promise<OpenWeatherApiResponse> => {
+    const response = await fetch(buildUrl(data.lat, data.long))
+    if (!response.ok) {
+      throw new Error(
+        `OpenWeather request failed with status ${response.status}`
+      )
+    }
+    return response.json()
+  })
+
+const queryClient = new QueryClient()
+
+function WeatherDashboard() {
+  const results = useQueries({
+    queries: CITIES.map((city) => ({
+      queryKey: ["forecast", city.name],
+      queryFn: () =>
+        getForecast({
+          data: { lat: city.location[0], long: city.location[1] },
+        }),
+    })),
+  })
+
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="typeset typeset-docs flex min-w-0 flex-col gap-4 leading-loose"></div>
+    <div className="relative flex min-h-svh w-full min-w-screen flex-col items-center justify-center rounded-md bg-neutral-900 p-6">
+      <div className="typeset typeset-docs flex w-full min-w-0 justify-around gap-4 leading-loose">
+        {results.map((result, idx) => {
+          const city = CITIES[idx]
+          if (result.isPending) {
+            return <div key={city.name}>Loading {city.name}...</div>
+          }
+          if (result.isError) {
+            return (
+              <div key={city.name}>
+                Failed to load {city.name}: {result.error.message}
+              </div>
+            )
+          }
+          return (
+            <CustomCard
+              key={city.name}
+              data={result.data}
+              description={result.data.list[0].weather[0].description}
+            />
+          )
+        })}
+      </div>
+      <ShootingStars />
+      <StarsBackground />
     </div>
   )
 }
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <WeatherDashboard />
+    </QueryClientProvider>
+  )
+}
+
+export const Route = createFileRoute("/")({ component: App })
